@@ -36,7 +36,9 @@ def process_point_cloud_data(npz_file, output_file, static_html_file=None, width
     data = np.load(npz_file)
     extrinsics = data["extrinsics"]
     intrinsics = data["intrinsics"]
-    trajs = data["coords"]
+    # Support missing coords (trajs)
+    has_trajs = "coords" in data
+    trajs = data["coords"] if has_trajs else None
     T, C, H, W = data["video"].shape
     
     fx = intrinsics[0, 0, 0]
@@ -72,11 +74,15 @@ def process_point_cloud_data(npz_file, output_file, static_html_file=None, width
     first_frame_inv = np.linalg.inv(extrinsics[0])
     normalized_extrinsics = np.array([first_frame_inv @ ext for ext in extrinsics])
     
-    normalized_trajs = np.zeros_like(trajs)
-    for t in range(T):
-        homogeneous_trajs = np.concatenate([trajs[t], np.ones((trajs.shape[1], 1))], axis=1)
-        transformed_trajs = (first_frame_inv @ homogeneous_trajs.T).T
-        normalized_trajs[t] = transformed_trajs[:, :3]
+    # Only process normalized_trajs if trajs is present
+    if has_trajs:
+        normalized_trajs = np.zeros_like(trajs)
+        for t in range(T):
+            homogeneous_trajs = np.concatenate([trajs[t], np.ones((trajs.shape[1], 1))], axis=1)
+            transformed_trajs = (first_frame_inv @ homogeneous_trajs.T).T
+            normalized_trajs[t] = transformed_trajs[:, :3]
+    else:
+        normalized_trajs = None
     
     # Get conf data from npz file
     conf_data = data["conf"].item() if "conf" in data else {}
@@ -87,7 +93,7 @@ def process_point_cloud_data(npz_file, output_file, static_html_file=None, width
         "intrinsics": intrinsics,
         "extrinsics": normalized_extrinsics,
         "inv_extrinsics": np.linalg.inv(normalized_extrinsics),
-        "trajectories": normalized_trajs.astype(np.float32),
+        "trajectories": normalized_trajs.astype(np.float32) if normalized_trajs is not None else None,
         "cameraZ": 0.0,
         "visibs": data["visibs"] if "visibs" in data else None,
         "confs": data["confs"] if "confs" in data else None
@@ -117,7 +123,7 @@ def process_point_cloud_data(npz_file, output_file, static_html_file=None, width
         "totalFrames": int(T),
         "resolution": fixed_size,
         "baseFrameRate": fps,
-        "numTrajectoryPoints": normalized_trajs.shape[1],
+        "numTrajectoryPoints": normalized_trajs.shape[1] if normalized_trajs is not None else 0,
         "fov": float(fov_y),
         "fov_x": float(fov_x),
         "original_aspect_ratio": float(original_aspect_ratio),

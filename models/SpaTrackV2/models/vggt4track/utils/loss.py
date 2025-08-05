@@ -80,7 +80,7 @@ def compute_loss(predictions, annots):
     # loss3: normal loss
     ln_normal, _ = normal_loss(predictions["points_map"], points_map_gt, gt_mask[:,0])
     ln_normal = ln_normal.mean()
-    #NOTE: loss4: consistent loss
+    # NOTE: loss4: consistent loss
     norm_rescale = gt_metric_scale.mean()
     points_map_gt_cons = points_map_gt.clone() / norm_rescale
     if "scale" in predictions.keys():
@@ -101,6 +101,7 @@ def compute_loss(predictions, annots):
         ln_scale_shift = 10*ln_scale_shift.mean()
     else:
         ln_scale_shift = 0 * ln_cons.mean()
+        
     # loss6: pose loss
     c2w_traj_gt[...,:3, 3] /= norm_rescale
     ln_pose = 0
