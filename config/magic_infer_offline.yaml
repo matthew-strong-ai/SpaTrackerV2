@@ -39,7 +39,7 @@ model:
       window_len: 60
     stablizer: True
     mode: "online"
-    s_wind: 200
+    s_wind: 500
     overlap: 4
   track_num: 0
 

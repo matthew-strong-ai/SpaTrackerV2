@@ -133,6 +133,8 @@ class VGGT4Track(nn.Module, PyTorchModelHubMixin):
         self,
         images: torch.Tensor,
         annots = {},
+        fx_prev = None,
+        fy_prev = None,
         **kwargs):
         """
         Forward pass of the VGGT4Track model.
@@ -191,16 +193,29 @@ class VGGT4Track(nn.Module, PyTorchModelHubMixin):
         end = time.time()
         print(f"Time taken for aggregator and heads: {end - start:.3f} seconds")
         predictions["images"] = (images)*255.0
+                                                         
         # output the camera pose
         predictions["poses_pred"] = torch.eye(4)[None].repeat(T, 1, 1)[None]
         predictions["poses_pred"][:,:,:3,:4], predictions["intrs"] = pose_encoding_to_extri_intri(predictions["pose_enc_list"][-1],
                                                                                                                      images_proc.shape[-2:])
         predictions["poses_pred"] = torch.inverse(predictions["poses_pred"])
+
+        if fx_prev is not None:
+            scale_x = torch.from_numpy(fx_prev).to(predictions["intrs"].device) / predictions["intrs"][0, :fx_prev.shape[0], 0, 0]
+            scale_x = scale_x.mean() * W_proc / W 
+            predictions["intrs"][:, :, 0, 0] *= scale_x
+        if fy_prev is not None:
+            scale_y = torch.from_numpy(fy_prev).to(predictions["intrs"].device) / predictions["intrs"][0, :fy_prev.shape[0], 1, 1]
+            scale_y = scale_y.mean() * H_proc / H
+            predictions["intrs"][:, :, 1, 1] *= scale_y
+
+        # get the points map
         points_map = depth_to_points_colmap(depth.view(B*T, H_proc, W_proc), predictions["intrs"].view(B*T, 3, 3))
         predictions["points_map"] = points_map
         #NOTE: resize back
         predictions["points_map"] = F.interpolate(points_map.permute(0,3,1,2),
                                                          size=(H, W), mode='bilinear', align_corners=True).permute(0,2,3,1)
+
         predictions["unc_metric"] = F.interpolate(predictions["unc_metric"][:,None],
                                                          size=(H, W), mode='bilinear', align_corners=True)[:,0]
         predictions["intrs"][..., :1, :] *= W/W_proc 

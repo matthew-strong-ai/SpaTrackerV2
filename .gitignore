@@ -50,3 +50,7 @@ models/**/dist
 
 temp_local
 examples/results
+
+dyn_check
+
+evaluation/saved

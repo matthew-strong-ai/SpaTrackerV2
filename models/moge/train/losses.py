@@ -47,7 +47,6 @@ def affine_invariant_global_loss(
     scale, shift = torch.where(valid, scale, 0), torch.where(valid[..., None], shift, 0)
 
     pred_points = scale[..., None, None, None] * pred_points + shift[..., None, None, :]
-
     # Compute loss
     weight = (valid[..., None, None] & mask).float() / gt_points[..., 2].clamp_min(1e-5)
     weight = weight.clamp_max(10.0 * weighted_mean(weight, mask, dim=(-2, -1), keepdim=True))   # In case your data contains extremely small depth values

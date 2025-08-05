@@ -672,6 +672,38 @@
       </div>
 
       <div class="settings-group">
+        <h3>Keep History</h3>
+        <div class="checkbox-container">
+          <label class="toggle-switch">
+            <input type="checkbox" id="enable-keep-history">
+            <span class="toggle-slider"></span>
+          </label>
+          <label for="enable-keep-history">Enable Keep History</label>
+        </div>
+        <div class="slider-container">
+          <label for="history-stride">Stride</label>
+          <select id="history-stride">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="5" selected>5</option>
+            <option value="10">10</option>
+            <option value="20">20</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h3>Background</h3>
+        <div class="checkbox-container">
+          <label class="toggle-switch">
+            <input type="checkbox" id="white-background">
+            <span class="toggle-slider"></span>
+          </label>
+          <label for="white-background">White Background</label>
+        </div>
+      </div>
+
+      <div class="settings-group">
         <div class="btn-group">
           <button id="reset-view-btn" style="flex: 1; margin-right: 5px;">Reset View</button>
           <button id="reset-settings-btn" style="flex: 1; margin-left: 5px;">Reset Settings</button>
@@ -739,7 +771,10 @@
           showCameraFrustum: document.getElementById('show-camera-frustum'),
           frustumSize: document.getElementById('frustum-size'),
           hideSettingsBtn: document.getElementById('hide-settings-btn'),
-          showSettingsBtn: document.getElementById('show-settings-btn')
+          showSettingsBtn: document.getElementById('show-settings-btn'),
+          enableKeepHistory: document.getElementById('enable-keep-history'),
+          historyStride: document.getElementById('history-stride'),
+          whiteBackground: document.getElementById('white-background')
         };
         
         this.scene = null;
@@ -749,6 +784,12 @@
         this.pointCloud = null;
         this.trajectories = [];
         this.cameraFrustum = null;
+        
+        // Keep History functionality
+        this.historyPointClouds = [];
+        this.historyTrajectories = [];
+        this.historyFrames = [];
+        this.maxHistoryFrames = 20;
         
         this.initThreeJS();
         this.loadDefaultSettings().then(() => {
@@ -975,6 +1016,28 @@
           this.ui.showSettingsBtn.addEventListener('click', () => {
             this.ui.settingsPanel.classList.remove('is-hidden');
             this.ui.showSettingsBtn.style.display = 'none';
+          });
+        }
+        
+        // Keep History event listeners
+        if (this.ui.enableKeepHistory) {
+          this.ui.enableKeepHistory.addEventListener('change', () => {
+            if (!this.ui.enableKeepHistory.checked) {
+              this.clearHistory();
+            }
+          });
+        }
+        
+        if (this.ui.historyStride) {
+          this.ui.historyStride.addEventListener('change', () => {
+            this.clearHistory();
+          });
+        }
+        
+        // Background toggle event listener
+        if (this.ui.whiteBackground) {
+          this.ui.whiteBackground.addEventListener('change', () => {
+            this.toggleBackground();
           });
         }
       }
@@ -1295,6 +1358,9 @@
         this.pointCloud.geometry.computeBoundingSphere(); // Important for camera culling
         
         this.updateTrajectories(frameIndex);
+        
+        // Keep History management
+        this.updateHistory(frameIndex);
         
         const progress = (frameIndex + 1) / this.config.totalFrames;
         this.ui.progress.style.width = `${progress * 100}%`;
@@ -1752,14 +1818,285 @@
         this.updateCameraFrustum(this.currentFrame);
       }
       
+      // Keep History methods
+      updateHistory(frameIndex) {
+        if (!this.ui.enableKeepHistory.checked || !this.data) return;
+        
+        const stride = parseInt(this.ui.historyStride.value);
+        const newHistoryFrames = this.calculateHistoryFrames(frameIndex, stride);
+        
+        // Check if history frames changed
+        if (this.arraysEqual(this.historyFrames, newHistoryFrames)) return;
+        
+        this.clearHistory();
+        this.historyFrames = newHistoryFrames;
+        
+        // Create history point clouds and trajectories
+        this.historyFrames.forEach(historyFrame => {
+          if (historyFrame !== frameIndex) {
+            this.createHistoryPointCloud(historyFrame);
+            this.createHistoryTrajectories(historyFrame);
+          }
+        });
+      }
+      
+      calculateHistoryFrames(currentFrame, stride) {
+        const frames = [];
+        let frame = 1; // Start from frame 1
+        
+        while (frame <= currentFrame && frames.length < this.maxHistoryFrames) {
+          frames.push(frame);
+          frame += stride;
+        }
+        
+        // Always include current frame
+        if (!frames.includes(currentFrame)) {
+          frames.push(currentFrame);
+        }
+        
+        return frames.sort((a, b) => a - b);
+      }
+      
+      createHistoryPointCloud(frameIndex) {
+        const numPoints = this.config.resolution[0] * this.config.resolution[1];
+        const positions = new Float32Array(numPoints * 3);
+        const colors = new Float32Array(numPoints * 3);
+        
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        
+        const material = new THREE.PointsMaterial({
+          size: parseFloat(this.ui.pointSize.value),
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.5, // Transparent for history
+          sizeAttenuation: true
+        });
+        
+        const historyPointCloud = new THREE.Points(geometry, material);
+        this.scene.add(historyPointCloud);
+        this.historyPointClouds.push(historyPointCloud);
+        
+        // Update the history point cloud with data
+        this.updateHistoryPointCloud(historyPointCloud, frameIndex);
+      }
+      
+      updateHistoryPointCloud(pointCloud, frameIndex) {
+        const positions = pointCloud.geometry.attributes.position.array;
+        const colors = pointCloud.geometry.attributes.color.array;
+
+        const rgbVideo = this.data.rgb_video;
+        const depthsRgb = this.data.depths_rgb;
+        const intrinsics = this.data.intrinsics;
+        const invExtrinsics = this.data.inv_extrinsics;
+        
+        const width = this.config.resolution[0];
+        const height = this.config.resolution[1];
+        const numPoints = width * height;
+        
+        const K = this.get3x3Matrix(intrinsics.data, intrinsics.shape, frameIndex);
+        const fx = K[0][0], fy = K[1][1], cx = K[0][2], cy = K[1][2];
+        
+        const invExtrMat = this.get4x4Matrix(invExtrinsics.data, invExtrinsics.shape, frameIndex);
+        const transform = this.getTransformElements(invExtrMat);
+        
+        const rgbFrame = this.getFrame(rgbVideo.data, rgbVideo.shape, frameIndex);
+        const depthFrame = this.getFrame(depthsRgb.data, depthsRgb.shape, frameIndex);
+        
+        const maxDepth = parseFloat(this.ui.maxDepth.value) || 10.0;
+        
+        let validPointCount = 0;
+        
+        for (let i = 0; i < numPoints; i++) {
+          const xPix = i % width;
+          const yPix = Math.floor(i / width);
+          
+          const d0 = depthFrame[i * 3];
+          const d1 = depthFrame[i * 3 + 1];
+          const depthEncoded = d0 | (d1 << 8);
+          const depthValue = (depthEncoded / ((1 << 16) - 1)) * 
+                           (this.config.depthRange[1] - this.config.depthRange[0]) + 
+                           this.config.depthRange[0];
+          
+          if (depthValue === 0 || depthValue > maxDepth) {
+            continue;
+          }
+          
+          const X = ((xPix - cx) * depthValue) / fx;
+          const Y = ((yPix - cy) * depthValue) / fy;
+          const Z = depthValue;
+          
+          const tx = transform.m11 * X + transform.m12 * Y + transform.m13 * Z + transform.m14;
+          const ty = transform.m21 * X + transform.m22 * Y + transform.m23 * Z + transform.m24;
+          const tz = transform.m31 * X + transform.m32 * Y + transform.m33 * Z + transform.m34;
+          
+          const index = validPointCount * 3;
+          positions[index] = tx;
+          positions[index + 1] = -ty;
+          positions[index + 2] = -tz;
+          
+          colors[index] = rgbFrame[i * 3] / 255;
+          colors[index + 1] = rgbFrame[i * 3 + 1] / 255;
+          colors[index + 2] = rgbFrame[i * 3 + 2] / 255;
+          
+          validPointCount++;
+        }
+        
+        pointCloud.geometry.setDrawRange(0, validPointCount);
+        pointCloud.geometry.attributes.position.needsUpdate = true;
+        pointCloud.geometry.attributes.color.needsUpdate = true;
+      }
+      
+      createHistoryTrajectories(frameIndex) {
+        if (!this.data.trajectories) return;
+        
+        const trajectoryData = this.data.trajectories.data;
+        const [totalFrames, numTrajectories] = this.data.trajectories.shape;
+        const palette = this.createColorPalette(numTrajectories);
+        
+        const historyTrajectoryGroup = new THREE.Group();
+        
+        for (let i = 0; i < numTrajectories; i++) {
+          const ballSize = parseFloat(this.ui.trajectoryBallSize.value);
+          const sphereGeometry = new THREE.SphereGeometry(ballSize, 16, 16);
+          const sphereMaterial = new THREE.MeshBasicMaterial({ 
+            color: palette[i], 
+            transparent: true, 
+            opacity: 0.3 // Transparent for history
+          });
+          const positionMarker = new THREE.Mesh(sphereGeometry, sphereMaterial);
+          
+          const currentOffset = (frameIndex * numTrajectories + i) * 3;
+          positionMarker.position.set(
+            trajectoryData[currentOffset],
+            -trajectoryData[currentOffset + 1],
+            -trajectoryData[currentOffset + 2]
+          );
+          
+          historyTrajectoryGroup.add(positionMarker);
+        }
+        
+        this.scene.add(historyTrajectoryGroup);
+        this.historyTrajectories.push(historyTrajectoryGroup);
+      }
+      
+      clearHistory() {
+        // Clear history point clouds
+        this.historyPointClouds.forEach(pointCloud => {
+          if (pointCloud.geometry) pointCloud.geometry.dispose();
+          if (pointCloud.material) pointCloud.material.dispose();
+          this.scene.remove(pointCloud);
+        });
+        this.historyPointClouds = [];
+        
+        // Clear history trajectories
+        this.historyTrajectories.forEach(trajectoryGroup => {
+          trajectoryGroup.children.forEach(child => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) child.material.dispose();
+          });
+          this.scene.remove(trajectoryGroup);
+        });
+        this.historyTrajectories = [];
+        
+        this.historyFrames = [];
+      }
+      
+      arraysEqual(a, b) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+          if (a[i] !== b[i]) return false;
+        }
+        return true;
+      }
+      
+      toggleBackground() {
+        const isWhiteBackground = this.ui.whiteBackground.checked;
+        
+        if (isWhiteBackground) {
+          // Switch to white background
+          document.body.style.backgroundColor = '#ffffff';
+          this.scene.background = new THREE.Color(0xffffff);
+          
+          // Update UI elements for white background
+          document.documentElement.style.setProperty('--bg', '#ffffff');
+          document.documentElement.style.setProperty('--text', '#333333');
+          document.documentElement.style.setProperty('--text-secondary', '#666666');
+          document.documentElement.style.setProperty('--border', '#cccccc');
+          document.documentElement.style.setProperty('--surface', '#f5f5f5');
+          document.documentElement.style.setProperty('--shadow', 'rgba(0, 0, 0, 0.1)');
+          document.documentElement.style.setProperty('--shadow-hover', 'rgba(0, 0, 0, 0.2)');
+          
+          // Update status bar and control panel backgrounds
+          this.ui.statusBar.style.background = 'rgba(245, 245, 245, 0.9)';
+          this.ui.statusBar.style.color = '#333333';
+          
+          const controlPanel = document.getElementById('control-panel');
+          if (controlPanel) {
+            controlPanel.style.background = 'rgba(245, 245, 245, 0.95)';
+          }
+          
+          const settingsPanel = document.getElementById('settings-panel');
+          if (settingsPanel) {
+            settingsPanel.style.background = 'rgba(245, 245, 245, 0.98)';
+          }
+          
+        } else {
+          // Switch back to dark background
+          document.body.style.backgroundColor = '#1a1a1a';
+          this.scene.background = new THREE.Color(0x1a1a1a);
+          
+          // Restore original dark theme variables
+          document.documentElement.style.setProperty('--bg', '#1a1a1a');
+          document.documentElement.style.setProperty('--text', '#e0e0e0');
+          document.documentElement.style.setProperty('--text-secondary', '#a0a0a0');
+          document.documentElement.style.setProperty('--border', '#444444');
+          document.documentElement.style.setProperty('--surface', '#2c2c2c');
+          document.documentElement.style.setProperty('--shadow', 'rgba(0, 0, 0, 0.2)');
+          document.documentElement.style.setProperty('--shadow-hover', 'rgba(0, 0, 0, 0.3)');
+          
+          // Restore original UI backgrounds
+          this.ui.statusBar.style.background = 'rgba(30, 30, 30, 0.9)';
+          this.ui.statusBar.style.color = '#e0e0e0';
+          
+          const controlPanel = document.getElementById('control-panel');
+          if (controlPanel) {
+            controlPanel.style.background = 'rgba(44, 44, 44, 0.95)';
+          }
+          
+          const settingsPanel = document.getElementById('settings-panel');
+          if (settingsPanel) {
+            settingsPanel.style.background = 'rgba(44, 44, 44, 0.98)';
+          }
+        }
+        
+        // Show status message
+        this.ui.statusBar.textContent = isWhiteBackground ? "Switched to white background" : "Switched to dark background";
+        this.ui.statusBar.classList.remove('hidden');
+        
+        setTimeout(() => {
+          this.ui.statusBar.classList.add('hidden');
+        }, 2000);
+      }
+      
       resetSettings() {
         if (!this.defaultSettings) return;
         
         this.applyDefaultSettings();
         
+        // Reset background to dark theme
+        if (this.ui.whiteBackground) {
+          this.ui.whiteBackground.checked = false;
+          this.toggleBackground();
+        }
+        
         this.updatePointCloudSettings();
         this.updateTrajectorySettings();
         this.updateFrustumDimensions();
+        
+        // Clear history when resetting settings
+        this.clearHistory();
         
         this.ui.statusBar.textContent = "Settings reset to defaults";
         this.ui.statusBar.classList.remove('hidden');
