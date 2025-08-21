@@ -7,6 +7,7 @@
 import torch
 from PIL import Image
 from torchvision import transforms as TF
+from typing import List, Tuple, Optional, Callable
 
 
 def load_and_preprocess_images(image_path_list, mode="crop"):
@@ -144,6 +145,13 @@ def load_and_preprocess_images(image_path_list, mode="crop"):
             images = images.unsqueeze(0)
 
     return images
+
+def get_default_transforms(image_size: Tuple[int, int] = (224, 224)) -> TF.Compose:
+    """Get default image transforms for training."""
+    return TF.Compose([
+        # transforms.Resize(image_size),
+        TF.ToTensor(),
+    ])
 
 def preprocess_image(img_tensor, mode="crop", target_size=518, keep_ratio=False):
     """

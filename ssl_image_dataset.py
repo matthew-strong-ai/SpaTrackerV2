@@ -64,6 +64,91 @@ class SequenceLearningDataset(Dataset):
         y = full_sequence[-self.n:] # Shape: (n, C, H, W)
         
         return X, y
+    
+    def save_sample_sequences(self, output_dir: str = "./sample_sequences", num_sequences: int = 3, denormalize: bool = True):
+        """
+        Save sample sequences (input + target frames) to disk for visualization.
+        
+        Args:
+            output_dir: Directory to save sample sequences
+            num_sequences: Number of sequences to save
+            denormalize: Whether to denormalize images (reverse ImageNet normalization)
+        """
+        import os
+        import random
+        from PIL import Image as PILImage
+        import numpy as np
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        print(f"🎬 Saving {num_sequences} random sample sequences to {output_dir}")
+        
+        # ImageNet normalization values for denormalization
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        
+        # Generate random sequence indices
+        max_sequences = min(num_sequences, len(self))
+        random_indices = random.sample(range(len(self)), max_sequences)
+        print(f"📊 Selected random sequence indices: {random_indices}")
+        
+        for i, seq_idx in enumerate(random_indices):
+            try:
+                # Get a sequence (X=input frames, y=target frames)
+                X, y = self[seq_idx]  # X: (m, C, H, W), y: (n, C, H, W)
+                
+                # Create sequence directory with sample number for clarity
+                seq_dir = os.path.join(output_dir, f"sample_{i:03d}_seq_{seq_idx:03d}")
+                os.makedirs(seq_dir, exist_ok=True)
+                
+                print(f"  📁 Saving sample {i} (sequence {seq_idx}) - {X.shape[0]} input + {y.shape[0]} target frames")
+                
+                # Save input frames
+                input_dir = os.path.join(seq_dir, "input_frames")
+                os.makedirs(input_dir, exist_ok=True)
+                
+                for frame_idx in range(X.shape[0]):
+                    img_tensor = X[frame_idx]  # Shape: (C, H, W)
+                    img_array = img_tensor.cpu().numpy().transpose(1, 2, 0)
+                    
+                    if denormalize:
+                        img_array = img_array * std + mean
+                    
+                    img_array = np.clip(img_array, 0, 1)
+                    img_array = (img_array * 255).astype(np.uint8)
+                    
+                    pil_image = PILImage.fromarray(img_array)
+                    save_path = os.path.join(input_dir, f"input_frame_{frame_idx:02d}.png")
+                    pil_image.save(save_path)
+                
+                # Save target frames
+                target_dir = os.path.join(seq_dir, "target_frames")
+                os.makedirs(target_dir, exist_ok=True)
+                
+                for frame_idx in range(y.shape[0]):
+                    img_tensor = y[frame_idx]  # Shape: (C, H, W)
+                    img_array = img_tensor.cpu().numpy().transpose(1, 2, 0)
+                    
+                    if denormalize:
+                        img_array = img_array * std + mean
+                    
+                    img_array = np.clip(img_array, 0, 1)
+                    img_array = (img_array * 255).astype(np.uint8)
+                    
+                    pil_image = PILImage.fromarray(img_array)
+                    save_path = os.path.join(target_dir, f"target_frame_{frame_idx:02d}.png")
+                    pil_image.save(save_path)
+                
+                print(f"    ✅ Saved sample {i} (sequence {seq_idx}): {X.shape[0]} input + {y.shape[0]} target frames")
+                
+            except Exception as e:
+                print(f"    ❌ Error saving sample {i} (sequence {seq_idx}): {e}")
+                continue
+        
+        print(f"🎉 Sample sequences saved to {output_dir}")
+        print(f"    View structure: ls -la {output_dir}/*/")
+        
+        return output_dir
 
 def visualize_random_samples(dataset, n=5):
     """
